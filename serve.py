@@ -58,36 +58,57 @@ def _connect():
     url = _get_weaviate_url()
     key = _get_weaviate_api_key()
 
-    # Costruisci gli header per REST (e li riuseremo per gRPC)
+    # ----- Costruisci headers (REST) -----
     headers = {}
     vertex_key = os.environ.get("VERTEX_APIKEY")
+
+    # A) API key statica
     if vertex_key:
         for k in ["X-Goog-Vertex-Api-Key", "X-Goog-Api-Key", "X-Palm-Api-Key", "X-Goog-Studio-Api-Key"]:
             headers[k] = vertex_key
+
+    # B) OAuth bearer dal refresher (se attivo): già include Authorization e X-Goog-Vertex-Api-Key
     if not vertex_key and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-        # contiene Authorization: Bearer <token> e X-Goog-Vertex-Api-Key=<token>
         headers.update(_VERTEX_HEADERS)
 
-    # Crea il client (solo headers REST qui)
+    # ----- Crea client (headers per REST) -----
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
         auth_credentials=Auth.api_key(key),
         headers=headers or None,
     )
 
-    # --- PATCH per gRPC: inietta gli stessi headers nei metadata gRPC interni ---
+    # ----- Inietta metadata gRPC (chiavi *minuscole*) -----
+    # gRPC richiede lower-case ASCII per i metadata header
+    grpc_meta = {}
+    for k, v in (headers or {}).items():
+        kk = k.lower()
+        grpc_meta[kk] = v
+
+    # Safety: assicurati che almeno una di queste chiavi sia presente in minuscolo
+    if vertex_key:
+        for kk in ["x-goog-vertex-api-key", "x-goog-api-key", "x-palm-api-key", "x-goog-studio-api-key"]:
+            grpc_meta.setdefault(kk, vertex_key)
+    else:
+        # se stai usando OAuth, assicurati che 'authorization' sia presente
+        if "authorization" not in grpc_meta and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
+            auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get("authorization")
+            if auth:
+                grpc_meta["authorization"] = auth
+
+    # Scrivi nei campi interni compatibili con le varie minor del client
     try:
-        # alcune versioni espongono 'grpc_metadata', altre '_grpc_metadata'
         conn = getattr(client, "_connection", None)
         if conn is not None:
             if hasattr(conn, "grpc_metadata") and isinstance(conn.grpc_metadata, dict):
-                conn.grpc_metadata.update(headers)
+                conn.grpc_metadata.update(grpc_meta)
             elif hasattr(conn, "_grpc_metadata") and isinstance(conn._grpc_metadata, dict):
-                conn._grpc_metadata.update(headers)
+                conn._grpc_metadata.update(grpc_meta)
     except Exception as e:
-        print("[weaviate] warning: non riesco a impostare gli header gRPC:", e)
+        print("[weaviate] warning: cannot set gRPC metadata headers:", e)
 
     return client
+
 
 
 
