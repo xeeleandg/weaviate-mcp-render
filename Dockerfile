@@ -9,6 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY serve.py .
 
-# Render assigns PORT
 EXPOSE 10000
 CMD ["python", "serve.py"]
