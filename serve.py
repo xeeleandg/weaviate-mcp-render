@@ -130,8 +130,10 @@ def _sync_refresh_vertex_token() -> bool:
         return False
     global _VERTEX_HEADERS
     _VERTEX_HEADERS = _build_vertex_header_map(token)
-    os.environ["GOOGLE_APIKEY"] = token
-    os.environ["PALM_APIKEY"] = token
+    if os.environ.get("GOOGLE_APIKEY") == token:
+        os.environ.pop("GOOGLE_APIKEY", None)
+    if os.environ.get("PALM_APIKEY") == token:
+        os.environ.pop("PALM_APIKEY", None)
     return True
 
 
@@ -158,6 +160,13 @@ def _connect():
         # prova un refresh sincrono se possibile
         if _sync_refresh_vertex_token():
             headers.update(_VERTEX_HEADERS)
+            # assicurati che nessuna env residuale confonda l'autenticazione
+            token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")
+            if token:
+                if os.environ.get("GOOGLE_APIKEY") == token:
+                    os.environ.pop("GOOGLE_APIKEY", None)
+                if os.environ.get("PALM_APIKEY") == token:
+                    os.environ.pop("PALM_APIKEY", None)
 
     # ----- Crea client (headers per REST) -----
     client = weaviate.connect_to_weaviate_cloud(
@@ -464,8 +473,10 @@ def _refresh_vertex_oauth_loop():
             creds.refresh(Request())
             token = creds.token
             _VERTEX_HEADERS = _build_vertex_header_map(token)
-            os.environ["GOOGLE_APIKEY"] = token
-            os.environ["PALM_APIKEY"] = token
+            if os.environ.get("GOOGLE_APIKEY") == token:
+                os.environ.pop("GOOGLE_APIKEY", None)
+            if os.environ.get("PALM_APIKEY") == token:
+                os.environ.pop("PALM_APIKEY", None)
             print("[vertex-oauth] 🔄 Vertex token refreshed")
             sleep_s = 55 * 60
             if creds.expiry:
