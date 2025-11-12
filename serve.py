@@ -52,55 +52,85 @@ def _get_weaviate_api_key() -> str:
     if not api_key:
         raise RuntimeError("Please set WEAVIATE_API_KEY.")
     return api_key
+    
+    
+def _mint_vertex_token_now() -> str:
+    """
+    Ritorna un access token OAuth Vertex fresco dalla Service Account.
+    Usa GOOGLE_APPLICATION_CREDENTIALS (o ..._JSON scritto su disco).
+    """
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+    import os, json
+    # Se hai GOOGLE_APPLICATION_CREDENTIALS_JSON, scrivilo su file (se non già fatto)
+    gac_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if gac_json and not gac_path:
+        tmp = "/app/gcp_credentials.json"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(gac_json)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp
+        gac_path = tmp
+    if not gac_path:
+        raise RuntimeError("Missing GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+    creds = service_account.Credentials.from_service_account_file(gac_path, scopes=SCOPES)
+    creds.refresh(Request())
+    if not creds.token:
+        raise RuntimeError("Failed to mint Vertex OAuth token")
+    return creds.token
+
+def _build_vertex_headers() -> tuple[dict, dict]:
+    """
+    Costruisce gli header per REST (camel-case) e per gRPC (lowercase).
+    Priorità:
+      1) VERTEX_APIKEY (chiave statica) -> X-Goog-Vertex-Api-Key
+      2) OAuth token sincrono -> X-Goog-Vertex-Api-Key = <token oauth 'nudo'>
+    """
+    import os
+    rest = {}
+    grpc = {}
+    # A) API key statica
+    vertex_api_key = os.environ.get("VERTEX_APIKEY")
+    if vertex_api_key:
+        for k in ["X-Goog-Vertex-Api-Key", "X-Goog-Api-Key", "X-Palm-Api-Key", "X-Goog-Studio-Api-Key"]:
+            rest[k] = vertex_api_key
+        for k in ["x-goog-vertex-api-key", "x-goog-api-key", "x-palm-api-key", "x-goog-studio-api-key"]:
+            grpc[k] = vertex_api_key
+        return rest, grpc
+    # B) OAuth “nudo” come fai in Colab
+    token = _mint_vertex_token_now()
+    rest["X-Goog-Vertex-Api-Key"] = token
+    grpc["x-goog-vertex-api-key"] = token
+    # (opzionale ma utile): passa anche Authorization per compatibilità
+    rest["Authorization"] = f"Bearer {token}"
+    grpc["authorization"] = f"Bearer {token}"
+    return rest, grpc
+
 
 
 def _connect():
+    # ⚠️ Usa lo stesso formato di Colab: in Colab passi SOLO l'host (senza https://).
+    # Se nella tua env hai l’URL completo, puoi fare un normalizzatore semplice:
     url = _get_weaviate_url()
+    url = url.replace("https://", "").replace("http://", "")  # allinea a Colab
+
     key = _get_weaviate_api_key()
 
-    # ===== Costruisci headers per REST =====
-    headers = {}
+    # Costruisci gli header “alla Colab”
+    rest_headers, grpc_meta = _build_vertex_headers()
 
-    # Se hai una API key statica:
-    vertex_api_key = os.environ.get("VERTEX_APIKEY")
-    if vertex_api_key:
-        # accettiamo tutti i nomi che WCS supporta (per sicurezza)
-        for k in ["X-Goog-Vertex-Api-Key", "X-Goog-Api-Key", "X-Palm-Api-Key", "X-Goog-Studio-Api-Key"]:
-            headers[k] = vertex_api_key
-
-    # Se usi l’OAuth refresher: _VERTEX_HEADERS contiene il token OAUTH “nudo”
-    # → esponilo come X-Goog-Vertex-Api-Key (come fai nel notebook)
-    if not vertex_api_key and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-        token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key") or _VERTEX_HEADERS.get("x-goog-vertex-api-key")
-        if not token:
-            # se nel refresher hai solo Authorization, estrai il token "nudo" dopo 'Bearer '
-            auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get("authorization")
-            if auth and auth.lower().startswith("bearer "):
-                token = auth.split(" ", 1)[1].strip()
-        if token:
-            headers["X-Goog-Vertex-Api-Key"] = token
-
-    # ===== Crea client (headers per REST) =====
+    # Client: headers per REST
     client = weaviate.connect_to_weaviate_cloud(
-        cluster_url=url,                       # come nel tuo notebook: host del cluster
-        auth_credentials=Auth.api_key(key),    # admin/tenant key WCS
-        headers=headers or None,               # header REST
+        cluster_url=url,
+        auth_credentials=Auth.api_key(key),
+        headers=rest_headers or None,
     )
 
-    # ===== Inietta metadata gRPC (chiavi minuscole) =====
-    grpc_meta = {}
-    for k, v in (headers or {}).items():
-        grpc_meta[k.lower()] = v
-    # fallback: se per caso hai Authorization nel refresher, passa anche quello in gRPC
-    if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-        auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get("authorization")
-        if auth:
-            grpc_meta.setdefault("authorization", auth)
-
+    # Inietta metadata gRPC (chiavi minuscole)
     try:
         conn = getattr(client, "_connection", None)
         if conn is not None:
-            # copriamo le varianti del client v4
             if hasattr(conn, "grpc_metadata") and isinstance(conn.grpc_metadata, dict):
                 conn.grpc_metadata.update(grpc_meta)
             elif hasattr(conn, "_grpc_metadata") and isinstance(conn._grpc_metadata, dict):
@@ -109,6 +139,7 @@ def _connect():
         print("[weaviate] warn: cannot set gRPC metadata headers:", e)
 
     return client
+
 
 
 mcp = FastMCP("weaviate-mcp-http")
@@ -236,46 +267,28 @@ def hybrid_search(
     return_properties: Optional[List[str]] = None,
     include_metadata: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Esegue una hybrid search con gli stessi parametri del notebook:
-    - alpha: peso della componente vettoriale (0=BM25, 1=vector)
-    - query_properties: limita BM25 ai campi indicati
-    - return_properties: proprietà da restituire
-    - include_metadata: se True, ritorna score e distance
-    """
     client = _connect()
     try:
         coll = client.collections.get(collection)
         if coll is None:
             return {"error": f"Collection '{collection}' non trovata"}
-
-        kwargs = {
-            "query": query,
-            "alpha": alpha,
-            "limit": limit,
-        }
+        kwargs = {"query": query, "alpha": alpha, "limit": limit}
         if query_properties:
             kwargs["query_properties"] = query_properties
         if return_properties:
             kwargs["return_properties"] = return_properties
         if include_metadata:
             kwargs["return_metadata"] = MetadataQuery(score=True, distance=True)
-
         resp = coll.query.hybrid(**kwargs)
-
         out = []
         for o in getattr(resp, "objects", []) or []:
-            item = {
-                "uuid": str(getattr(o, "uuid", "")),
-                "properties": getattr(o, "properties", {}),
-            }
+            item = {"uuid": str(getattr(o, "uuid", "")),
+                    "properties": getattr(o, "properties", {})}
             md = getattr(o, "metadata", None)
             if md:
-                # il notebook usa o.metadata.score come "fusion score"
                 item["score"] = getattr(md, "score", None)
                 item["distance"] = getattr(md, "distance", None)
             out.append(item)
-
         return {"count": len(out), "results": out}
     finally:
         client.close()
