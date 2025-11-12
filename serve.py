@@ -112,6 +112,10 @@ def _load_vertex_user_project(path: str) -> None:
         _VERTEX_USER_PROJECT = data.get("project_id")
         if not _VERTEX_USER_PROJECT and data.get("quota_project_id"):
             _VERTEX_USER_PROJECT = data["quota_project_id"]
+        if _VERTEX_USER_PROJECT:
+            print(f"[vertex-oauth] detected service account project: {_VERTEX_USER_PROJECT}")
+        else:
+            print("[vertex-oauth] warning: project_id not found in service account JSON")
     except Exception as exc:
         print(f"[vertex-oauth] unable to read project id from SA: {exc}")
 
@@ -188,7 +192,11 @@ def _connect():
     # ----- Crea client (headers per REST) -----
     if headers:
         token_preview = headers.get("X-Goog-Vertex-Api-Key", "")[:10]
-        print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}...")
+        project_debug = headers.get("X-Goog-User-Project")
+        if project_debug:
+            print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... project: {project_debug}")
+        else:
+            print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... (no x-goog-user-project)")
     else:
         print("[vertex-oauth] WARNING: no Vertex headers available for connection")
     client = weaviate.connect_to_weaviate_cloud(
