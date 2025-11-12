@@ -559,6 +559,23 @@ def _maybe_start_vertex_oauth_refresher():
 
 _maybe_start_vertex_oauth_refresher()
 
+# --- Assicurati che richieste su /mcp senza slash vengano gestite ---
+try:
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class _McpTrailingSlashMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if request.url.path == "/mcp":
+                request.scope["path"] = "/mcp/"
+                request.scope["raw_path"] = b"/mcp/"
+            return await call_next(request)
+
+    _starlette_app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+    if _starlette_app is not None:
+        _starlette_app.add_middleware(_McpTrailingSlashMiddleware)
+except Exception as _middleware_err:
+    print("[mcp] warning: cannot install trailing-slash middleware:", _middleware_err)
+
 @mcp.tool
 def diagnose_vertex() -> Dict[str, Any]:
     """
