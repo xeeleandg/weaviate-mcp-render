@@ -159,6 +159,7 @@ def _sync_refresh_vertex_token() -> bool:
 def _connect():
     url = _get_weaviate_url()
     key = _get_weaviate_api_key()
+    _resolve_service_account_path()  # garantisce il caricamento del project id se disponibile
 
     # ----- Costruisci headers (REST) -----
     headers = {}
@@ -226,24 +227,25 @@ def _connect():
             if auth:
                 grpc_meta["authorization"] = auth
 
-    # Scrivi nei campi interni compatibili con le varie minor del client
+    # Scrivi nei campi interni compatibili con le varie minor del client (forza assegnazione)
     try:
         conn = getattr(client, "_connection", None)
         if conn is not None:
-            if hasattr(conn, "grpc_metadata"):
-                if isinstance(conn.grpc_metadata, dict):
-                    conn.grpc_metadata.update(grpc_meta)
-                elif isinstance(conn.grpc_metadata, list):
-                    conn.grpc_metadata.extend(list(grpc_meta.items()))
-                else:
-                    conn.grpc_metadata = list(grpc_meta.items())
-            if hasattr(conn, "_grpc_metadata"):
-                if isinstance(conn._grpc_metadata, dict):
-                    conn._grpc_metadata.update(grpc_meta)
-                elif isinstance(conn._grpc_metadata, list):
-                    conn._grpc_metadata.extend(list(grpc_meta.items()))
-                else:
-                    conn._grpc_metadata = list(grpc_meta.items())
+            meta_list = list(grpc_meta.items())
+            try:
+                setattr(conn, "grpc_metadata", meta_list)
+            except Exception:
+                pass
+            try:
+                setattr(conn, "_grpc_metadata", meta_list)
+            except Exception:
+                pass
+            # Metodo helper (se presente nelle ultime versioni)
+            if hasattr(conn, "set_grpc_metadata"):
+                try:
+                    conn.set_grpc_metadata(meta_list)
+                except Exception:
+                    pass
             debug_meta = getattr(conn, "grpc_metadata", None)
             print(f"[vertex-oauth] grpc metadata now: {debug_meta}")
     except Exception as e:
