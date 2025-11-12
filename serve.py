@@ -19,15 +19,12 @@ _VERTEX_USER_PROJECT: Optional[str] = None
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
     """
-    Costruisce l'insieme di header necessari per Weaviate + Vertex (REST).
-    Le versioni lowercase saranno generate per gRPC separatamente in _connect.
+    Costruisce l'insieme minimo di header necessari per Vertex.
+    Evitiamo alias multipli (X-Goog-Api-Key, X-Palm-Api-Key, ...), che possono
+    essere interpretati come API key tradizionali e provocare errori.
     """
     headers: Dict[str, str] = {
         "X-Goog-Vertex-Api-Key": token,
-        "X-Goog-Api-Key": token,
-        "X-Palm-Api-Key": token,
-        "X-Goog-Studio-Api-Key": token,
-        "Authorization": f"Bearer {token}",
     }
     if _VERTEX_USER_PROJECT:
         headers["X-Goog-User-Project"] = _VERTEX_USER_PROJECT
@@ -214,7 +211,11 @@ def _connect():
     # gRPC richiede lower-case ASCII per i metadata header
     grpc_meta = {}
     for k, v in (headers or {}).items():
-        grpc_meta[k.lower()] = v
+        kk = k.lower()
+        # Evita alias non necessari in gRPC: manteniamo solo x-goog-vertex-api-key e user-project
+        if kk not in {"x-goog-vertex-api-key", "x-goog-user-project"}:
+            continue
+        grpc_meta[kk] = v
 
     # Safety: assicurati che almeno una di queste chiavi sia presente in minuscolo
     if vertex_key:
