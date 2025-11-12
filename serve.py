@@ -15,6 +15,26 @@ from weaviate.classes.query import MetadataQuery
 _VERTEX_HEADERS: Dict[str, str] = {}
 _VERTEX_REFRESH_THREAD_STARTED = False
 
+
+def _build_vertex_header_map(token: str) -> Dict[str, str]:
+    """
+    Costruisce l'insieme di header necessari per Weaviate + Vertex (REST e gRPC).
+    """
+    header_names = [
+        "X-Goog-Vertex-Api-Key",
+        "X-Goog-Api-Key",
+        "X-Palm-Api-Key",
+        "X-Goog-Studio-Api-Key",
+    ]
+    headers: Dict[str, str] = {}
+    for name in header_names:
+        headers[name] = token
+        headers[name.lower()] = token
+    # Authorization/Bearer
+    headers["Authorization"] = f"Bearer {token}"
+    headers["authorization"] = f"Bearer {token}"
+    return headers
+
 # ---- GCP Project discovery from Service Account or ADC ----
 def _discover_gcp_project() -> Optional[str]:
     # Priority: GOOGLE_APPLICATION_CREDENTIALS_JSON -> GOOGLE_APPLICATION_CREDENTIALS -> ADC default project
@@ -109,12 +129,7 @@ def _sync_refresh_vertex_token() -> bool:
     if not token:
         return False
     global _VERTEX_HEADERS
-    _VERTEX_HEADERS = {
-        "X-Goog-Vertex-Api-Key": token,
-        "x-goog-vertex-api-key": token,
-        "Authorization": f"Bearer {token}",
-        "authorization": f"Bearer {token}",
-    }
+    _VERTEX_HEADERS = _build_vertex_header_map(token)
     os.environ["GOOGLE_APIKEY"] = token
     os.environ["PALM_APIKEY"] = token
     return True
@@ -448,12 +463,7 @@ def _refresh_vertex_oauth_loop():
         try:
             creds.refresh(Request())
             token = creds.token
-            _VERTEX_HEADERS = {
-                "X-Goog-Vertex-Api-Key": token,
-                "x-goog-vertex-api-key": token,
-                "Authorization": f"Bearer {token}",
-                "authorization": f"Bearer {token}",
-            }
+            _VERTEX_HEADERS = _build_vertex_header_map(token)
             os.environ["GOOGLE_APIKEY"] = token
             os.environ["PALM_APIKEY"] = token
             print("[vertex-oauth] 🔄 Vertex token refreshed")
