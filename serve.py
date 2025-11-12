@@ -18,21 +18,16 @@ _VERTEX_REFRESH_THREAD_STARTED = False
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
     """
-    Costruisce l'insieme di header necessari per Weaviate + Vertex (REST e gRPC).
+    Costruisce l'insieme di header necessari per Weaviate + Vertex (REST).
+    Le versioni lowercase saranno generate per gRPC separatamente in _connect.
     """
-    header_names = [
-        "X-Goog-Vertex-Api-Key",
-        "X-Goog-Api-Key",
-        "X-Palm-Api-Key",
-        "X-Goog-Studio-Api-Key",
-    ]
-    headers: Dict[str, str] = {}
-    for name in header_names:
-        headers[name] = token
-        headers[name.lower()] = token
-    # Authorization/Bearer
-    headers["Authorization"] = f"Bearer {token}"
-    headers["authorization"] = f"Bearer {token}"
+    headers: Dict[str, str] = {
+        "X-Goog-Vertex-Api-Key": token,
+        "X-Goog-Api-Key": token,
+        "X-Palm-Api-Key": token,
+        "X-Goog-Studio-Api-Key": token,
+        "Authorization": f"Bearer {token}",
+    }
     return headers
 
 # ---- GCP Project discovery from Service Account or ADC ----
@@ -130,6 +125,7 @@ def _sync_refresh_vertex_token() -> bool:
         return False
     global _VERTEX_HEADERS
     _VERTEX_HEADERS = _build_vertex_header_map(token)
+    print(f"[vertex-oauth] sync token refresh (prefix: {token[:10]}...)")
     if os.environ.get("GOOGLE_APIKEY") == token:
         os.environ.pop("GOOGLE_APIKEY", None)
     if os.environ.get("PALM_APIKEY") == token:
@@ -167,8 +163,15 @@ def _connect():
                     os.environ.pop("GOOGLE_APIKEY", None)
                 if os.environ.get("PALM_APIKEY") == token:
                     os.environ.pop("PALM_APIKEY", None)
+        else:
+            print("[vertex-oauth] unable to obtain Vertex token synchronously")
 
     # ----- Crea client (headers per REST) -----
+    if headers:
+        token_preview = headers.get("X-Goog-Vertex-Api-Key", "")[:10]
+        print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}...")
+    else:
+        print("[vertex-oauth] WARNING: no Vertex headers available for connection")
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
         auth_credentials=Auth.api_key(key),
@@ -179,8 +182,7 @@ def _connect():
     # gRPC richiede lower-case ASCII per i metadata header
     grpc_meta = {}
     for k, v in (headers or {}).items():
-        kk = k.lower()
-        grpc_meta[kk] = v
+        grpc_meta[k.lower()] = v
 
     # Safety: assicurati che almeno una di queste chiavi sia presente in minuscolo
     if vertex_key:
@@ -477,7 +479,8 @@ def _refresh_vertex_oauth_loop():
                 os.environ.pop("GOOGLE_APIKEY", None)
             if os.environ.get("PALM_APIKEY") == token:
                 os.environ.pop("PALM_APIKEY", None)
-            print("[vertex-oauth] 🔄 Vertex token refreshed")
+            token_preview = token[:10] if token else None
+            print(f"[vertex-oauth] 🔄 Vertex token refreshed (prefix: {token_preview}...)")
             sleep_s = 55 * 60
             if creds.expiry:
                 now = datetime.datetime.utcnow().replace(tzinfo=creds.expiry.tzinfo)
