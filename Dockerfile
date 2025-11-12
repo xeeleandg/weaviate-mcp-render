@@ -4,10 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY requirements.txt .
+COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
-
-COPY serve.py .
 
 EXPOSE 10000
 CMD ["python", "serve.py"]
