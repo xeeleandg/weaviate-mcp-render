@@ -576,6 +576,18 @@ try:
 except Exception as _middleware_err:
     print("[mcp] warning: cannot install trailing-slash middleware:", _middleware_err)
 
+try:
+    from starlette.responses import RedirectResponse
+
+    @_starlette_app.route("/mcp", methods=["GET", "HEAD", "POST", "OPTIONS"])
+    async def _mcp_route_adapter(request):
+        scope = request.scope
+        scope["path"] = "/mcp/"
+        scope["raw_path"] = b"/mcp/"
+        return await _starlette_app(scope, request.receive, request.send)
+except Exception as _adapter_err:
+    print("[mcp] warning: cannot register /mcp adapter route:", _adapter_err)
+
 @mcp.tool
 def diagnose_vertex() -> Dict[str, Any]:
     """
