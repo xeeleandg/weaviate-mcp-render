@@ -492,8 +492,12 @@ def image_search_vertex(collection: str, image_b64: str, caption: Optional[str] 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
-    raw_path = os.environ.get("MCP_PATH", "/mcp/")
-    path = raw_path.rstrip("/") + "/"
+    raw_path = os.environ.get("MCP_PATH", "/mcp")
+    if not raw_path.startswith("/"):
+        raw_path = "/" + raw_path
+    path = raw_path.rstrip("/")
+    if not path:
+        path = "/"
     mcp.run(transport="http", host="0.0.0.0", port=port, path=path)
 
 
@@ -559,34 +563,25 @@ def _maybe_start_vertex_oauth_refresher():
 
 _maybe_start_vertex_oauth_refresher()
 
-# --- Assicurati che richieste su /mcp senza slash vengano gestite ---
+# --- Allinea gli endpoint MCP sia con slash che senza ---
 try:
-    from starlette.middleware.base import BaseHTTPMiddleware
-
-    class _McpTrailingSlashMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request, call_next):
-            if request.url.path == "/mcp":
-                request.scope["path"] = "/mcp/"
-                request.scope["raw_path"] = b"/mcp/"
-            return await call_next(request)
+    from starlette.routing import Route
 
     _starlette_app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+
     if _starlette_app is not None:
-        _starlette_app.add_middleware(_McpTrailingSlashMiddleware)
-except Exception as _middleware_err:
-    print("[mcp] warning: cannot install trailing-slash middleware:", _middleware_err)
+        async def _mcp_alias(request):
+            scope = dict(request.scope)
+            scope["path"] = "/mcp/"
+            scope["raw_path"] = b"/mcp/"
+            return await _starlette_app(scope, request.receive, request.send)
 
-try:
-    from starlette.responses import RedirectResponse
-
-    @_starlette_app.route("/mcp", methods=["GET", "HEAD", "POST", "OPTIONS"])
-    async def _mcp_route_adapter(request):
-        scope = request.scope
-        scope["path"] = "/mcp/"
-        scope["raw_path"] = b"/mcp/"
-        return await _starlette_app(scope, request.receive, request.send)
-except Exception as _adapter_err:
-    print("[mcp] warning: cannot register /mcp adapter route:", _adapter_err)
+        _starlette_app.router.routes.insert(
+            0,
+            Route("/mcp", endpoint=_mcp_alias, methods=["GET", "HEAD", "POST", "OPTIONS"])
+        )
+except Exception as _route_err:
+    print("[mcp] warning: cannot register MCP alias route:", _route_err)
 
 @mcp.tool
 def diagnose_vertex() -> Dict[str, Any]:
