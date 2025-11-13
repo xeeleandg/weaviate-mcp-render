@@ -33,6 +33,16 @@ e usa gli strumenti:
 - Per Weaviate Cloud bastano **URL + API key**.
 - Il server ascolta su `0.0.0.0:$PORT` (compatibile Render).
 - Health-check disponibile su `/health`.
+- Puoi personalizzare nome/descrizione/prompt del server con:
+  - `MCP_SERVER_NAME` (default `weaviate-mcp-http`)
+  - `MCP_DESCRIPTION` per una descrizione breve
+  - `MCP_PROMPT` / `MCP_INSTRUCTIONS` per un prompt testuale condiviso con il client
+- In alternativa puoi versionare i messaggi in file e puntarli con:
+  - `MCP_PROMPT_FILE` o `MCP_INSTRUCTIONS_FILE` (es. `prompts/instructions.md`)
+  - `MCP_DESCRIPTION_FILE` (es. `prompts/description.txt`)
+- Se non configuri nulla, il server carica automaticamente il prompt predefinito in `prompts/instructions.md`.
+- Lo strumento `get_instructions` restituisce in ogni momento il prompt attivo.
+- Usa `reload_instructions` per rileggere i file senza riavviare il server.
 
 ## Autenticazione Vertex AI
 

@@ -1,6 +1,7 @@
 # serve.py
 import os
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastmcp import FastMCP
@@ -15,6 +16,10 @@ from weaviate.classes.query import MetadataQuery
 _VERTEX_HEADERS: Dict[str, str] = {}
 _VERTEX_REFRESH_THREAD_STARTED = False
 _VERTEX_USER_PROJECT: Optional[str] = None
+
+_BASE_DIR = Path(__file__).resolve().parent
+_DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
+_DEFAULT_DESCRIPTION_PATH = _BASE_DIR / "prompts" / "description.txt"
 
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
@@ -257,11 +262,94 @@ def _connect():
 
 
 
-mcp = FastMCP("weaviate-mcp-http")
+def _load_text_source(env_keys, file_path):
+    """
+    Legge un testo da una lista di variabili d'ambiente o da un file.
+    Priorità: file > prima variabile non vuota.
+    """
+    if isinstance(env_keys, str):
+        env_keys = [env_keys]
+    path = Path(file_path) if file_path else None
+    if path and path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as exc:
+            print(f"[mcp] warning: cannot read instructions file '{path}': {exc}")
+    for key in env_keys:
+        val = os.environ.get(key)
+        if val:
+            return val.strip()
+    return None
+
+
+_MCP_SERVER_NAME = os.environ.get("MCP_SERVER_NAME", "weaviate-mcp-http")
+_MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get("MCP_INSTRUCTIONS_FILE")
+if not _MCP_INSTRUCTIONS_FILE and _DEFAULT_PROMPT_PATH.exists():
+    _MCP_INSTRUCTIONS_FILE = str(_DEFAULT_PROMPT_PATH)
+_MCP_DESCRIPTION_FILE = os.environ.get("MCP_DESCRIPTION_FILE")
+if not _MCP_DESCRIPTION_FILE and _DEFAULT_DESCRIPTION_PATH.exists():
+    _MCP_DESCRIPTION_FILE = str(_DEFAULT_DESCRIPTION_PATH)
+
+_MCP_INSTRUCTIONS = _load_text_source(["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE)
+_MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
+
+mcp = FastMCP(_MCP_SERVER_NAME)
+
+def _apply_mcp_metadata():
+    try:
+        info = getattr(mcp, "server_info", None)
+        if isinstance(info, dict):
+            if _MCP_DESCRIPTION:
+                info["description"] = _MCP_DESCRIPTION
+            if _MCP_INSTRUCTIONS:
+                info["instructions"] = _MCP_INSTRUCTIONS
+        elif _MCP_DESCRIPTION or _MCP_INSTRUCTIONS:
+            if _MCP_DESCRIPTION:
+                setattr(mcp, "description", _MCP_DESCRIPTION)
+            if _MCP_INSTRUCTIONS:
+                setattr(mcp, "instructions", _MCP_INSTRUCTIONS)
+    except Exception as _info_err:
+        print("[mcp] warning: cannot set server info metadata:", _info_err)
+
+
+_apply_mcp_metadata()
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
     return JSONResponse({"status": "ok", "service": "weaviate-mcp-http"})
+
+
+@mcp.tool
+def get_instructions() -> Dict[str, Any]:
+    """
+    Restituisce le istruzioni/prompt configurati per questo server MCP.
+    """
+    return {
+        "instructions": _MCP_INSTRUCTIONS,
+        "description": _MCP_DESCRIPTION,
+        "server_name": _MCP_SERVER_NAME,
+        "prompt_file": _MCP_INSTRUCTIONS_FILE,
+        "description_file": _MCP_DESCRIPTION_FILE,
+    }
+
+
+@mcp.tool
+def reload_instructions() -> Dict[str, Any]:
+    """
+    Ricarica descrizione/prompt da variabili d'ambiente o file associati.
+    """
+    global _MCP_INSTRUCTIONS, _MCP_DESCRIPTION, _MCP_INSTRUCTIONS_FILE, _MCP_DESCRIPTION_FILE
+    _MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get("MCP_INSTRUCTIONS_FILE")
+    if not _MCP_INSTRUCTIONS_FILE and _DEFAULT_PROMPT_PATH.exists():
+        _MCP_INSTRUCTIONS_FILE = str(_DEFAULT_PROMPT_PATH)
+    _MCP_DESCRIPTION_FILE = os.environ.get("MCP_DESCRIPTION_FILE")
+    if not _MCP_DESCRIPTION_FILE and _DEFAULT_DESCRIPTION_PATH.exists():
+        _MCP_DESCRIPTION_FILE = str(_DEFAULT_DESCRIPTION_PATH)
+    _MCP_INSTRUCTIONS = _load_text_source(["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE)
+    _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
+    _apply_mcp_metadata()
+    return get_instructions()
 
 
 @mcp.tool
