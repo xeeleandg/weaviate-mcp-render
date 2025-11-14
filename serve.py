@@ -165,6 +165,10 @@ def _connect():
 
     # ----- Costruisci headers (REST) -----
     headers = {}
+    openai_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
+    if openai_key:
+        headers["X-OpenAI-Api-Key"] = openai_key
+
     vertex_key = os.environ.get("VERTEX_APIKEY")
     vertex_bearer = os.environ.get("VERTEX_BEARER_TOKEN")
 
@@ -197,13 +201,16 @@ def _connect():
             print("[vertex-oauth] unable to obtain Vertex token synchronously")
 
     # ----- Crea client (headers per REST) -----
-    if headers:
-        token_preview = headers.get("X-Goog-Vertex-Api-Key", "")[:10]
+    vertex_token = headers.get("X-Goog-Vertex-Api-Key")
+    if vertex_token:
+        token_preview = vertex_token[:10]
         project_debug = headers.get("X-Goog-User-Project")
         if project_debug:
             print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... project: {project_debug}")
         else:
             print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... (no x-goog-user-project)")
+    elif headers:
+        print("[vertex-oauth] custom headers configured (non-Vertex)")
     else:
         print("[vertex-oauth] WARNING: no Vertex headers available for connection")
     client = weaviate.connect_to_weaviate_cloud(
@@ -234,9 +241,8 @@ def _connect():
                 grpc_meta["authorization"] = auth
     
     # 2) OpenAI per text2vec-openai in Weaviate
-    openai_key = os.environ.get("OPENAI_API_KEY")
     if openai_key:
-        headers["X-OpenAI-Api-Key"] = openai_key
+        grpc_meta["x-openai-api-key"] = openai_key
 
     # Scrivi nei campi interni compatibili con le varie minor del client (forza assegnazione)
     try:
@@ -362,7 +368,7 @@ def get_config() -> Dict[str, Any]:
     return {
         "weaviate_url": os.environ.get("WEAVIATE_CLUSTER_URL") or os.environ.get("WEAVIATE_URL"),
         "weaviate_api_key_set": bool(os.environ.get("WEAVIATE_API_KEY")),
-        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
+        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")),
         "cohere_api_key_set": bool(os.environ.get("COHERE_API_KEY")),
     }
 
