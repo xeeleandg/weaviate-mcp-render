@@ -476,15 +476,32 @@ def hybrid_search(
     collection: str,
     query: str,
     limit: int = 10,
-    alpha: float = 0.5,
+    alpha: float = 0.8,
     query_properties: Optional[List[str]] = None,
+    image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    Hybrid search che supporta sia testo che immagini.
+    Se viene fornita image_b64, genera l'embedding e lo usa per la parte vettoriale.
+    """
     client = _connect()
     try:
         coll = client.collections.get(collection)
         if coll is None:
             return {"error": f"Collection '{collection}' not found"}
-        kwargs = {"query": query, "alpha": alpha, "limit": limit}
+        kwargs = {"alpha": alpha, "limit": limit}
+        
+        # Se c'è un'immagine, genera embedding e usa near_vector per la parte vettoriale
+        if image_b64:
+            vec = _vertex_embed(image_b64=image_b64, text=query if query else None)
+            # Usa near_vector con multi_vector per la parte vettoriale
+            kwargs["near_vector"] = vec
+            kwargs["target_vector"] = "multi_vector"
+            if query:
+                kwargs["query"] = query  # BM25 parte testuale
+        else:
+            kwargs["query"] = query  # Solo testo
+        
         if query_properties:
             kwargs["query_properties"] = query_properties
         resp = coll.query.hybrid(**kwargs)
@@ -565,16 +582,20 @@ def insert_image_vertex(collection: str, image_b64: str, caption: Optional[str] 
 
 @mcp.tool
 def image_search_vertex(collection: str, image_b64: str, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
-    vec = _vertex_embed(image_b64=image_b64, text=caption)
+    """
+    Ricerca vettoriale per immagini usando near_image() (come su Colab).
+    Weaviate gestisce automaticamente l'embedding usando il multi2vec configurato.
+    """
     client = _connect()
     try:
         coll = client.collections.get(collection)
         if coll is None:
             return {"error": f"Collection '{collection}' not found"}
-        resp = coll.query.near_vector(
-            near_vector=vec,
+        # Usa near_image() come su Colab - Weaviate gestisce tutto internamente
+        resp = coll.query.near_image(
+            image=image_b64,
             limit=limit,
-            target_vector="image",
+            return_properties=["name", "source_pdf", "page_index", "mediaType"],
             return_metadata=MetadataQuery(distance=True),
         )
         out = []
