@@ -1,6 +1,8 @@
 # serve.py
 import os
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +18,9 @@ from weaviate.classes.query import MetadataQuery
 _VERTEX_HEADERS: Dict[str, str] = {}
 _VERTEX_REFRESH_THREAD_STARTED = False
 _VERTEX_USER_PROJECT: Optional[str] = None
+
+# In-memory storage per immagini caricate (temporaneo, scade dopo 1 ora)
+_UPLOADED_IMAGES: Dict[str, Dict[str, Any]] = {}
 
 _BASE_DIR = Path(__file__).resolve().parent
 _DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
@@ -384,6 +389,37 @@ def check_connection() -> Dict[str, Any]:
 
 
 @mcp.tool
+def upload_image(image_b64: str) -> Dict[str, Any]:
+    """
+    Carica un'immagine in base64 e restituisce un ID temporaneo da usare in hybrid_search.
+    L'immagine viene validata e pulita. L'ID è valido per 1 ora.
+    """
+    global _UPLOADED_IMAGES
+    
+    # Pulisci e valida il base64
+    cleaned_b64 = _clean_base64(image_b64)
+    if not cleaned_b64:
+        return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
+    
+    # Genera un ID univoco
+    image_id = str(uuid.uuid4())
+    
+    # Salva l'immagine con timestamp di scadenza (1 ora)
+    _UPLOADED_IMAGES[image_id] = {
+        "image_b64": cleaned_b64,
+        "expires_at": time.time() + 3600,  # 1 ora
+    }
+    
+    # Pulisci immagini scadute
+    current_time = time.time()
+    expired_ids = [img_id for img_id, data in _UPLOADED_IMAGES.items() if data["expires_at"] < current_time]
+    for img_id in expired_ids:
+        _UPLOADED_IMAGES.pop(img_id, None)
+    
+    return {"image_id": image_id, "expires_in": 3600}
+
+
+@mcp.tool
 def list_collections() -> List[str]:
     client = _connect()
     try:
@@ -478,14 +514,20 @@ def hybrid_search(
     limit: int = 10,
     alpha: float = 0.8,
     query_properties: Optional[Any] = None,  # Accetta sia lista che stringa JSON
+    image_id: Optional[str] = None,
     image_url: Optional[str] = None,
     image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Hybrid search che supporta sia testo che immagini.
-    Se viene fornita image_url o image_b64, genera l'embedding e lo usa per la parte vettoriale.
-    Preferisci image_url (più veloce per Claude) invece di image_b64.
+    Se viene fornita image_id (da upload_image), image_url o image_b64, genera l'embedding e lo usa per la parte vettoriale.
+    Preferisci image_id (più efficiente) > image_url > image_b64.
     """
+    # Forza l'uso della collection "Sinde" (come specificato nel prompt)
+    if collection and collection != "Sinde":
+        print(f"[hybrid_search] warning: collection '{collection}' requested, but using 'Sinde' as per instructions")
+        collection = "Sinde"
+    
     # Gestisci query_properties se arriva come stringa JSON invece di lista
     if query_properties and isinstance(query_properties, str):
         try:
@@ -493,7 +535,19 @@ def hybrid_search(
         except (json.JSONDecodeError, TypeError):
             pass  # Se non è JSON valido, ignora
     
-    # Carica immagine da URL se fornita (più efficiente di base64)
+    # Recupera immagine da image_id se fornito (metodo preferito)
+    if image_id and not image_b64:
+        if image_id in _UPLOADED_IMAGES:
+            img_data = _UPLOADED_IMAGES[image_id]
+            if img_data["expires_at"] > time.time():
+                image_b64 = img_data["image_b64"]
+            else:
+                _UPLOADED_IMAGES.pop(image_id, None)
+                return {"error": f"Image ID {image_id} has expired. Please upload the image again."}
+        else:
+            return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
+    
+    # Carica immagine da URL se fornita (più efficiente di base64 diretto)
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
@@ -707,22 +761,43 @@ def insert_image_vertex(collection: str, image_b64: str, caption: Optional[str] 
         client.close()
 
 @mcp.tool
-def image_search_vertex(collection: str, image_url: Optional[str] = None, image_b64: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
+def image_search_vertex(collection: str, image_id: Optional[str] = None, image_url: Optional[str] = None, image_b64: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
     """
     Ricerca vettoriale per immagini usando near_image() (come su Colab).
     Weaviate gestisce automaticamente l'embedding usando il multi2vec configurato.
-    Preferisci image_url (più veloce per Claude) invece di image_b64.
+    Preferisci image_id (da upload_image) > image_url > image_b64.
     """
-    # Carica immagine da URL se fornita (più efficiente di base64)
+    # Forza l'uso della collection "Sinde" (come specificato nel prompt)
+    if collection and collection != "Sinde":
+        print(f"[image_search_vertex] warning: collection '{collection}' requested, but using 'Sinde' as per instructions")
+        collection = "Sinde"
+    
+    # Recupera immagine da image_id se fornito (metodo preferito)
+    if image_id and not image_b64:
+        if image_id in _UPLOADED_IMAGES:
+            img_data = _UPLOADED_IMAGES[image_id]
+            if img_data["expires_at"] > time.time():
+                image_b64 = img_data["image_b64"]
+            else:
+                _UPLOADED_IMAGES.pop(image_id, None)
+                return {"error": f"Image ID {image_id} has expired. Please upload the image again."}
+        else:
+            return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
+    
+    # Carica immagine da URL se fornita (più efficiente di base64 diretto)
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
+        # Pulisci e valida il base64 caricato da URL
+        image_b64 = _clean_base64(image_b64)
+        if not image_b64:
+            return {"error": f"Invalid image format from URL: {image_url}"}
     
     if not image_b64:
-        return {"error": "Either image_url or image_b64 must be provided"}
+        return {"error": "Either image_id, image_url or image_b64 must be provided"}
     
-    # Pulisci e valida il base64
+    # Valida anche image_b64 se fornito direttamente
     image_b64 = _clean_base64(image_b64)
     if not image_b64:
         return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
