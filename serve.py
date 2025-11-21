@@ -453,31 +453,29 @@ def check_connection() -> Dict[str, Any]:
 
 
 @mcp.tool
-def upload_image(image_url: Optional[str] = None, image_b64: Optional[str] = None, image_path: Optional[str] = None) -> Dict[str, Any]:
+def upload_image(image_url: Optional[str] = None, image_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Carica un'immagine da URL, file path locale, o base64 e restituisce un ID temporaneo da usare in hybrid_search o image_search_vertex.
+    Carica un'immagine da URL o file path locale e restituisce un ID temporaneo da usare in hybrid_search o image_search_vertex.
     
     IMPORTANTE: 
-    - Se hai un URL dell'immagine, passa image_url - il server scaricherà e convertirà automaticamente.
-    - Se hai un file path locale sul server, passa image_path - il server leggerà il file direttamente.
-    - Evita image_b64 se possibile, perché richiede conversione manuale che può essere lenta.
+    - Se hai un URL dell'immagine, passa image_url - il server scaricherà e convertirà automaticamente in base64.
+    - Se hai un file path locale sul server, passa image_path - il server leggerà il file e lo convertirà in base64.
     
     L'immagine viene validata e pulita automaticamente. L'ID restituito è valido per 1 ora.
+    La conversione in base64 viene gestita automaticamente dal server - non devi convertire manualmente.
     
     Esempi:
     - upload_image(image_url="https://example.com/image.jpg") -> {"image_id": "uuid-here"}
     - upload_image(image_path="/path/to/image.jpg") -> {"image_id": "uuid-here"}
-    - upload_image(image_b64="iVBORw0KGgoAAAANS...") -> {"image_id": "uuid-here"}
     
-    NOTA: Se hai un file sul client (non sul server), usa l'endpoint HTTP POST /upload-image con multipart/form-data
-    invece di questo tool, per evitare di dover convertire in base64.
+    NOTA: Se hai un file sul client (non sul server), usa l'endpoint HTTP POST /upload-image con multipart/form-data.
     """
     global _UPLOADED_IMAGES
     
     cleaned_b64 = None
     
     if image_path:
-        # Carica l'immagine da file path locale
+        # Carica l'immagine da file path locale e converte in base64
         print(f"[upload_image] Loading image from path: {image_path}")
         try:
             import os
@@ -493,18 +491,13 @@ def upload_image(image_url: Optional[str] = None, image_b64: Optional[str] = Non
         if not cleaned_b64:
             return {"error": f"Invalid image file: {image_path}"}
     elif image_url:
-        # Carica l'immagine dall'URL
+        # Carica l'immagine dall'URL e converte in base64
         print(f"[upload_image] Loading image from URL: {image_url}")
         cleaned_b64 = _load_image_from_url(image_url)
         if not cleaned_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
-    elif image_b64:
-        # Pulisci e valida il base64
-        cleaned_b64 = _clean_base64(image_b64)
-        if not cleaned_b64:
-            return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
     else:
-        return {"error": "Either image_url, image_path, or image_b64 must be provided"}
+        return {"error": "Either image_url or image_path must be provided"}
     
     # Genera un ID univoco
     image_id = str(uuid.uuid4())
@@ -621,12 +614,12 @@ def hybrid_search(
     query_properties: Optional[Any] = None,  # Accetta sia lista che stringa JSON
     image_id: Optional[str] = None,
     image_url: Optional[str] = None,
-    image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Hybrid search che supporta sia testo che immagini.
-    Se viene fornita image_id (da upload_image), image_url o image_b64, genera l'embedding e lo usa per la parte vettoriale.
-    Preferisci image_id (più efficiente) > image_url > image_b64.
+    Se viene fornita image_id (da upload_image) o image_url, genera l'embedding e lo usa per la parte vettoriale.
+    La conversione in base64 viene gestita automaticamente dal server.
+    Preferisci image_id (più efficiente) > image_url.
     """
     # Forza l'uso della collection "Sinde" (come specificato nel prompt)
     if collection and collection != "Sinde":
@@ -640,8 +633,11 @@ def hybrid_search(
         except (json.JSONDecodeError, TypeError):
             pass  # Se non è JSON valido, ignora
     
+    # Variabile interna per base64 (non esposta nello schema MCP)
+    image_b64 = None
+    
     # Recupera immagine da image_id se fornito (metodo preferito)
-    if image_id and not image_b64:
+    if image_id:
         if image_id in _UPLOADED_IMAGES:
             img_data = _UPLOADED_IMAGES[image_id]
             if img_data["expires_at"] > time.time():
@@ -652,7 +648,7 @@ def hybrid_search(
         else:
             return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
     
-    # Carica immagine da URL se fornita (più efficiente di base64 diretto)
+    # Carica immagine da URL se fornita e converte in base64 internamente
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
@@ -661,12 +657,6 @@ def hybrid_search(
         image_b64 = _clean_base64(image_b64)
         if not image_b64:
             return {"error": f"Invalid image format from URL: {image_url}"}
-    
-    # Valida anche image_b64 se fornito direttamente
-    if image_b64:
-        image_b64 = _clean_base64(image_b64)
-        if not image_b64:
-            return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
     
     client = _connect()
     try:
@@ -866,19 +856,23 @@ def insert_image_vertex(collection: str, image_b64: str, caption: Optional[str] 
         client.close()
 
 @mcp.tool
-def image_search_vertex(collection: str, image_id: Optional[str] = None, image_url: Optional[str] = None, image_b64: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
+def image_search_vertex(collection: str, image_id: Optional[str] = None, image_url: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
     """
     Ricerca vettoriale per immagini usando near_image() (come su Colab).
     Weaviate gestisce automaticamente l'embedding usando il multi2vec configurato.
-    Preferisci image_id (da upload_image) > image_url > image_b64.
+    La conversione in base64 viene gestita automaticamente dal server.
+    Preferisci image_id (da upload_image) > image_url.
     """
     # Forza l'uso della collection "Sinde" (come specificato nel prompt)
     if collection and collection != "Sinde":
         print(f"[image_search_vertex] warning: collection '{collection}' requested, but using 'Sinde' as per instructions")
         collection = "Sinde"
     
+    # Variabile interna per base64 (non esposta nello schema MCP)
+    image_b64 = None
+    
     # Recupera immagine da image_id se fornito (metodo preferito)
-    if image_id and not image_b64:
+    if image_id:
         if image_id in _UPLOADED_IMAGES:
             img_data = _UPLOADED_IMAGES[image_id]
             if img_data["expires_at"] > time.time():
@@ -889,7 +883,7 @@ def image_search_vertex(collection: str, image_id: Optional[str] = None, image_u
         else:
             return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
     
-    # Carica immagine da URL se fornita (più efficiente di base64 diretto)
+    # Carica immagine da URL se fornita e converte in base64 internamente
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
@@ -900,12 +894,7 @@ def image_search_vertex(collection: str, image_id: Optional[str] = None, image_u
             return {"error": f"Invalid image format from URL: {image_url}"}
     
     if not image_b64:
-        return {"error": "Either image_id, image_url or image_b64 must be provided"}
-    
-    # Valida anche image_b64 se fornito direttamente
-    image_b64 = _clean_base64(image_b64)
-    if not image_b64:
-        return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
+        return {"error": "Either image_id or image_url must be provided"}
     
     client = _connect()
     try:

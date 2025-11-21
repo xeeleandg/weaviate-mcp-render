@@ -11,14 +11,13 @@ Linee guida principali:
   - Mantieni `alpha=0.8` (peso maggiore alla parte vettoriale, dato che le immagini sono vettorizzate) salvo che l'utente chieda qualcosa di diverso.
   - `limit` predefinito: 10 risultati; riduci o aumenta solo se l'utente lo richiede esplicitamente.
   - **Ricerche per immagini**: Se l'utente fornisce un'immagine:
-    1. **Se hai un file sul client (non sul server)**: Fai una richiesta HTTP POST all'endpoint `/upload-image` del server MCP con il file come multipart/form-data (campo 'image'). Questo evita di dover convertire in base64. Esempio: `POST https://<server-url>/upload-image` con `Content-Type: multipart/form-data` e campo `image` contenente il file.
-    2. **Se hai un URL dell'immagine**: Usa `upload_image(image_url="https://...")` - NON convertire l'immagine in base64! Il server scaricherà e convertirà l'immagine automaticamente.
-    3. **Se hai un file path locale sul server**: Usa `upload_image(image_path="/path/to/image.jpg")` - il server leggerà il file direttamente.
-    4. **Se hai già l'immagine in base64**: Puoi usare `upload_image(image_b64="...")`, ma questo è l'ultima opzione perché richiede conversione manuale che può essere lenta.
-    5. Il tool `upload_image` o l'endpoint HTTP restituirà un `image_id` che puoi usare immediatamente.
-    6. Poi usa `hybrid_search` con il parametro `image_id` (non `image_url` o `image_b64`). Questo è il metodo più affidabile.
-    7. L'immagine caricata è valida per 1 ora.
-    8. **IMPORTANTE**: NON convertire mai immagini in base64 manualmente se puoi evitarlo! Preferisci sempre: endpoint HTTP multipart > image_url > image_path > image_b64.
+    1. **Se hai un file sul client (non sul server)**: Fai una richiesta HTTP POST all'endpoint `/upload-image` del server MCP con il file come multipart/form-data (campo 'image'). Il server gestirà automaticamente la conversione in base64. Esempio: `POST https://<server-url>/upload-image` con `Content-Type: multipart/form-data` e campo `image` contenente il file.
+    2. **Se hai un URL dell'immagine**: Usa `upload_image(image_url="https://...")` - il server scaricherà e convertirà automaticamente in base64. NON convertire manualmente!
+    3. **Se hai un file path locale sul server**: Usa `upload_image(image_path="/path/to/image.jpg")` - il server leggerà il file e lo convertirà automaticamente in base64.
+    4. Il tool `upload_image` o l'endpoint HTTP restituirà un `image_id` che puoi usare immediatamente.
+    5. Poi usa `hybrid_search` con il parametro `image_id` (preferito) o `image_url` direttamente. NON passare mai base64 manualmente - il server gestisce tutto internamente.
+    6. L'immagine caricata è valida per 1 ora.
+    7. **IMPORTANTE**: NON convertire mai immagini in base64 manualmente! Il server gestisce automaticamente tutta la conversione. Usa solo `image_url`, `image_path` o `image_id`.
 - Se `hybrid_search` non restituisce risultati, prova al massimo una seconda ricerca riformulando leggermente la query (altrimenti segnala che il dato non è presente).
 - Nella risposta finale:
   - Riporta i risultati in forma tabellare o elenco, indicando sempre `name`, `source_pdf`, `page_index`, `mediaType`.
