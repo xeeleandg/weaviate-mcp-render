@@ -554,8 +554,12 @@ def _vertex_embed(image_b64: Optional[str] = None, text: Optional[str] = None, m
     from vertexai.vision_models import MultiModalEmbeddingModel, Image
     mdl = MultiModalEmbeddingModel.from_pretrained(model)
     import base64
-    image = Image.from_bytes(bytes() if not image_b64 else base64.b64decode(image_b64))
-    resp = mdl.get_embeddings(image=image if image_b64 else None, contextual_text=text)
+    # Image accetta bytes nel costruttore
+    image = None
+    if image_b64:
+        image_bytes = base64.b64decode(image_b64)
+        image = Image(image_bytes)
+    resp = mdl.get_embeddings(image=image, contextual_text=text)
     if getattr(resp, "image_embedding", None):
         return list(resp.image_embedding)
     if getattr(resp, "text_embedding", None):
