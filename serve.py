@@ -478,11 +478,13 @@ def hybrid_search(
     limit: int = 10,
     alpha: float = 0.8,
     query_properties: Optional[List[str]] = None,
+    image_url: Optional[str] = None,
     image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Hybrid search che supporta sia testo che immagini.
-    Se viene fornita image_b64, genera l'embedding e lo usa per la parte vettoriale.
+    Se viene fornita image_url o image_b64, genera l'embedding e lo usa per la parte vettoriale.
+    Preferisci image_url (più veloce per Claude) invece di image_b64.
     """
     # Gestisci query_properties se arriva come stringa JSON invece di lista
     if query_properties and isinstance(query_properties, str):
@@ -490,6 +492,12 @@ def hybrid_search(
             query_properties = json.loads(query_properties)
         except (json.JSONDecodeError, TypeError):
             pass  # Se non è JSON valido, ignora
+    
+    # Carica immagine da URL se fornita (più efficiente di base64)
+    if image_url and not image_b64:
+        image_b64 = _load_image_from_url(image_url)
+        if not image_b64:
+            return {"error": f"Failed to load image from URL: {image_url}"}
     
     client = _connect()
     try:
@@ -549,6 +557,70 @@ def _ensure_gcp_adc():
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         _load_vertex_user_project(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
 
+def _load_image_from_url(image_url: str) -> Optional[str]:
+    """
+    Carica un'immagine da URL pubblico e la converte in base64.
+    """
+    try:
+        import requests
+        import base64
+        response = requests.get(image_url, timeout=30, stream=True)
+        response.raise_for_status()
+        # Limita la dimensione a 10MB per evitare problemi
+        content = response.content
+        if len(content) > 10 * 1024 * 1024:
+            print(f"[image] warning: image from {image_url} is too large ({len(content)} bytes)")
+            return None
+        return base64.b64encode(content).decode('utf-8')
+    except Exception as e:
+        print(f"[image] error loading from URL {image_url}: {e}")
+        return None
+
+def _clean_base64(image_b64: str) -> Optional[str]:
+    """
+    Pulisce e valida un base64 string.
+    Rimuove eventuali prefissi data URL e verifica che sia valido.
+    """
+    import base64
+    import re
+    
+    # Rimuovi eventuali prefissi data URL (data:image/...;base64,)
+    if image_b64.startswith('data:'):
+        match = re.match(r'data:image/[^;]+;base64,(.+)', image_b64)
+        if match:
+            image_b64 = match.group(1)
+        else:
+            return None
+    
+    # Rimuovi spazi bianchi
+    image_b64 = image_b64.strip()
+    
+    # Valida che sia base64 valido
+    try:
+        # Verifica che contenga solo caratteri base64
+        if not re.match(r'^[A-Za-z0-9+/=]+$', image_b64):
+            print(f"[image] invalid base64 characters")
+            return None
+        
+        # Prova a decodificare
+        decoded = base64.b64decode(image_b64, validate=True)
+        
+        # Verifica che non sia vuoto
+        if len(decoded) == 0:
+            print(f"[image] empty image data")
+            return None
+        
+        # Verifica dimensione minima (almeno un byte di header)
+        if len(decoded) < 10:
+            print(f"[image] image too small ({len(decoded)} bytes)")
+            return None
+        
+        return image_b64
+    except Exception as e:
+        print(f"[image] base64 validation error: {e}")
+        return None
+
+
 def _vertex_embed(image_b64: Optional[str] = None, text: Optional[str] = None, model: str = "multimodalembedding@001"):
     if not _VERTEX_AVAILABLE:
         raise RuntimeError("google-cloud-aiplatform not installed")
@@ -592,11 +664,26 @@ def insert_image_vertex(collection: str, image_b64: str, caption: Optional[str] 
         client.close()
 
 @mcp.tool
-def image_search_vertex(collection: str, image_b64: str, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
+def image_search_vertex(collection: str, image_url: Optional[str] = None, image_b64: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
     """
     Ricerca vettoriale per immagini usando near_image() (come su Colab).
     Weaviate gestisce automaticamente l'embedding usando il multi2vec configurato.
+    Preferisci image_url (più veloce per Claude) invece di image_b64.
     """
+    # Carica immagine da URL se fornita (più efficiente di base64)
+    if image_url and not image_b64:
+        image_b64 = _load_image_from_url(image_url)
+        if not image_b64:
+            return {"error": f"Failed to load image from URL: {image_url}"}
+    
+    if not image_b64:
+        return {"error": "Either image_url or image_b64 must be provided"}
+    
+    # Pulisci e valida il base64
+    image_b64 = _clean_base64(image_b64)
+    if not image_b64:
+        return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
+    
     client = _connect()
     try:
         coll = client.collections.get(collection)

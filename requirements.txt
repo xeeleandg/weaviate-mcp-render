@@ -3,7 +3,6 @@ weaviate-client>=4.17.0,<5
 starlette>=0.37
 google-cloud-aiplatform>=1.66.0
 vertexai>=1.66.0
-
-google-auth>=2.35.0
+requests>=2.31.0
 
 google-auth>=2.35.0

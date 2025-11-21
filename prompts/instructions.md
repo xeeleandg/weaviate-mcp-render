@@ -9,7 +9,7 @@ Linee guida principali:
   - Usa `query_properties=["caption","name"]` e `return_properties=["name","source_pdf","page_index","mediaType"]`.
   - Mantieni `alpha=0.8` (peso maggiore alla parte vettoriale, dato che le immagini sono vettorizzate) salvo che l'utente chieda qualcosa di diverso.
   - `limit` predefinito: 10 risultati; riduci o aumenta solo se l'utente lo richiede esplicitamente.
-  - **Ricerche per immagini**: Se l'utente fornisce un'immagine (base64), passa il parametro `image_b64` a `hybrid_search`. La ricerca combinerà l'embedding dell'immagine (generato automaticamente) con il testo (se fornito) per trovare risultati simili tramite ricerca ibrida.
+  - **Ricerche per immagini**: Se l'utente fornisce un'immagine, usa sempre `image_url` (URL pubblico dell'immagine) invece di `image_b64`. Passa `image_url` a `hybrid_search` - il server caricherà automaticamente l'immagine e genererà l'embedding. La ricerca combinerà l'embedding dell'immagine con il testo (se fornito) per trovare risultati simili tramite ricerca ibrida. Se l'utente fornisce un'immagine come file locale o base64, chiedigli di caricarla su un servizio pubblico (es. imgur, pasteboard) e fornirti l'URL.
 - Se `hybrid_search` non restituisce risultati, prova al massimo una seconda ricerca riformulando leggermente la query (altrimenti segnala che il dato non è presente).
 - Nella risposta finale:
   - Riporta i risultati in forma tabellare o elenco, indicando sempre `name`, `source_pdf`, `page_index`, `mediaType`.
