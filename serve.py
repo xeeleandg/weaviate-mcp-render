@@ -484,6 +484,13 @@ def hybrid_search(
     Hybrid search che supporta sia testo che immagini.
     Se viene fornita image_b64, genera l'embedding e lo usa per la parte vettoriale.
     """
+    # Gestisci query_properties se arriva come stringa JSON invece di lista
+    if query_properties and isinstance(query_properties, str):
+        try:
+            query_properties = json.loads(query_properties)
+        except (json.JSONDecodeError, TypeError):
+            pass  # Se non è JSON valido, ignora
+    
     client = _connect()
     try:
         coll = client.collections.get(collection)
