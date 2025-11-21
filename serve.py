@@ -336,6 +336,70 @@ async def health(_request):
     return JSONResponse({"status": "ok", "service": "weaviate-mcp-http"})
 
 
+@mcp.custom_route("/upload-image", methods=["POST"])
+async def upload_image_endpoint(request):
+    """
+    Endpoint HTTP per upload diretto di immagini.
+    Accetta multipart/form-data con campo 'image' o JSON con 'image_b64'.
+    Restituisce image_id da usare in hybrid_search o image_search_vertex.
+    """
+    try:
+        content_type = request.headers.get("content-type", "")
+        image_b64 = None
+        
+        if "multipart/form-data" in content_type:
+            # Upload multipart (file diretto)
+            form = await request.form()
+            if "image" not in form:
+                return JSONResponse({"error": "Missing 'image' field in form data"}, status_code=400)
+            
+            file = form["image"]
+            if hasattr(file, "read"):
+                # File upload
+                import base64
+                file_bytes = await file.read()
+                image_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            else:
+                return JSONResponse({"error": "Invalid file upload"}, status_code=400)
+        else:
+            # JSON con base64
+            try:
+                data = await request.json()
+                image_b64 = data.get("image_b64")
+                if not image_b64:
+                    return JSONResponse({"error": "Missing 'image_b64' in JSON body"}, status_code=400)
+            except Exception:
+                return JSONResponse({"error": "Invalid request format. Use multipart/form-data with 'image' field or JSON with 'image_b64'"}, status_code=400)
+        
+        if not image_b64:
+            return JSONResponse({"error": "No image data provided"}, status_code=400)
+        
+        # Pulisci e valida il base64
+        cleaned_b64 = _clean_base64(image_b64)
+        if not cleaned_b64:
+            return JSONResponse({"error": "Invalid base64 image string"}, status_code=400)
+        
+        # Genera un ID univoco
+        image_id = str(uuid.uuid4())
+        
+        # Salva l'immagine con timestamp di scadenza (1 ora)
+        _UPLOADED_IMAGES[image_id] = {
+            "image_b64": cleaned_b64,
+            "expires_at": time.time() + 3600,  # 1 ora
+        }
+        
+        # Pulisci immagini scadute
+        current_time = time.time()
+        expired_ids = [img_id for img_id, data in _UPLOADED_IMAGES.items() if data["expires_at"] < current_time]
+        for img_id in expired_ids:
+            _UPLOADED_IMAGES.pop(img_id, None)
+        
+        return JSONResponse({"image_id": image_id, "expires_in": 3600})
+    except Exception as e:
+        print(f"[upload-image] error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @mcp.tool
 def get_instructions() -> Dict[str, Any]:
     """
