@@ -477,7 +477,7 @@ def hybrid_search(
     query: str,
     limit: int = 10,
     alpha: float = 0.8,
-    query_properties: Optional[List[str]] = None,
+    query_properties: Optional[Any] = None,  # Accetta sia lista che stringa JSON
     image_url: Optional[str] = None,
     image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -498,6 +498,16 @@ def hybrid_search(
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
+        # Pulisci e valida il base64 caricato da URL
+        image_b64 = _clean_base64(image_b64)
+        if not image_b64:
+            return {"error": f"Invalid image format from URL: {image_url}"}
+    
+    # Valida anche image_b64 se fornito direttamente
+    if image_b64:
+        image_b64 = _clean_base64(image_b64)
+        if not image_b64:
+            return {"error": "Invalid base64 image string. Please provide a valid base64-encoded image."}
     
     client = _connect()
     try:
@@ -560,17 +570,50 @@ def _ensure_gcp_adc():
 def _load_image_from_url(image_url: str) -> Optional[str]:
     """
     Carica un'immagine da URL pubblico e la converte in base64.
+    Valida che sia un formato immagine supportato.
     """
     try:
         import requests
         import base64
         response = requests.get(image_url, timeout=30, stream=True)
         response.raise_for_status()
+        
+        # Verifica content-type
+        content_type = response.headers.get('content-type', '').lower()
+        if not content_type.startswith('image/'):
+            print(f"[image] warning: URL {image_url} does not return an image (content-type: {content_type})")
+            # Non fallire subito, potrebbe essere un'immagine comunque
+        
         # Limita la dimensione a 10MB per evitare problemi
         content = response.content
         if len(content) > 10 * 1024 * 1024:
             print(f"[image] warning: image from {image_url} is too large ({len(content)} bytes)")
             return None
+        
+        # Verifica dimensione minima
+        if len(content) < 100:
+            print(f"[image] warning: image from {image_url} is too small ({len(content)} bytes)")
+            return None
+        
+        # Verifica che sia un formato immagine valido (controlla magic bytes)
+        valid_formats = {
+            b'\xff\xd8\xff': 'JPEG',
+            b'\x89PNG\r\n\x1a\n': 'PNG',
+            b'GIF87a': 'GIF',
+            b'GIF89a': 'GIF',
+            b'RIFF': 'WEBP',  # WEBP inizia con RIFF
+        }
+        is_valid = False
+        for magic, fmt in valid_formats.items():
+            if content.startswith(magic):
+                is_valid = True
+                print(f"[image] detected format: {fmt} from {image_url}")
+                break
+        
+        if not is_valid:
+            print(f"[image] warning: {image_url} may not be a valid image format")
+            # Non fallire, prova comunque
+        
         return base64.b64encode(content).decode('utf-8')
     except Exception as e:
         print(f"[image] error loading from URL {image_url}: {e}")
